@@ -19,8 +19,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import get_settings
 from src.pipeline import ResearchDomain, ResearchWorkflow, get_graph_ascii
+from src.utils.circuit_breaker import get_all_circuit_breaker_stats
 from src.utils.errors import RateLimitError, ResearchAgentError, ValidationError
 from src.utils.logging import bind_context, clear_context, get_logger, setup_logging
+from src.utils.metrics import MetricsMiddleware, get_metrics
 
 # Version info
 __version__ = "0.1.0"
@@ -94,6 +96,9 @@ def create_app() -> FastAPI:
 
     # Add request middleware
     app.add_middleware(RequestMiddleware)
+
+    # Add metrics middleware
+    app.add_middleware(MetricsMiddleware)
 
     return app
 
@@ -282,6 +287,49 @@ async def readiness_check() -> ReadyResponse:
     return ReadyResponse(
         status="ready" if all_ready else "not_ready",
         checks=checks,
+    )
+
+
+# =============================================================================
+# Metrics Endpoints
+# =============================================================================
+
+
+class MetricsResponse(BaseModel):
+    """Metrics response model."""
+
+    counters: list[dict[str, Any]]
+    histograms: list[dict[str, Any]]
+    gauges: list[dict[str, Any]]
+    circuit_breakers: dict[str, Any]
+
+
+@app.get("/metrics", tags=["Monitoring"])
+async def get_prometheus_metrics() -> Response:
+    """Get metrics in Prometheus text format.
+
+    Returns metrics suitable for Prometheus scraping.
+    """
+    metrics = get_metrics()
+    return Response(
+        content=metrics.to_prometheus_format(),
+        media_type="text/plain; version=0.0.4",
+    )
+
+
+@app.get("/metrics/json", response_model=MetricsResponse, tags=["Monitoring"])
+async def get_json_metrics() -> MetricsResponse:
+    """Get metrics in JSON format.
+
+    Returns metrics for debugging and dashboards.
+    """
+    metrics = get_metrics()
+    metrics_dict = metrics.to_dict()
+    return MetricsResponse(
+        counters=metrics_dict["counters"],
+        histograms=metrics_dict["histograms"],
+        gauges=metrics_dict["gauges"],
+        circuit_breakers=get_all_circuit_breaker_stats(),
     )
 
 

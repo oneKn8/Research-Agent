@@ -2,8 +2,10 @@
 
 Provides common functionality including:
 - Retry logic with exponential backoff
+- Circuit breaker for resilience
 - Error handling
 - Cost tracking
+- Metrics collection
 - Logging
 """
 
@@ -14,7 +16,14 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from src.config import get_settings
+from src.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerOpen,
+    get_circuit_breaker,
+)
 from src.utils.logging import get_logger
+from src.utils.metrics import record_worker_execution
 
 T = TypeVar("T")
 
@@ -74,13 +83,42 @@ class BaseWorker(ABC):
     Subclasses must implement:
     - _execute(): The actual work logic
     - worker_type: String identifying the worker type
+
+    Features:
+    - Automatic retry with exponential backoff
+    - Circuit breaker protection for external services
+    - Cost tracking and metrics collection
     """
 
-    def __init__(self) -> None:
-        """Initialize the worker."""
+    # Circuit breaker configuration (can be overridden in subclasses)
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+    CIRCUIT_BREAKER_TIMEOUT_SECONDS = 30.0
+    CIRCUIT_BREAKER_SUCCESS_THRESHOLD = 2
+
+    def __init__(self, use_circuit_breaker: bool = True) -> None:
+        """Initialize the worker.
+
+        Args:
+            use_circuit_breaker: Whether to enable circuit breaker protection
+        """
         self._settings = get_settings()
         self._logger = get_logger(self.__class__.__name__)
         self._cost_tracker = CostTracker()
+        self._use_circuit_breaker = use_circuit_breaker
+        self._circuit_breaker: CircuitBreaker | None = None
+
+    def _get_circuit_breaker(self) -> CircuitBreaker:
+        """Get or create the circuit breaker for this worker."""
+        if self._circuit_breaker is None:
+            config = CircuitBreakerConfig(
+                failure_threshold=self.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+                timeout_seconds=self.CIRCUIT_BREAKER_TIMEOUT_SECONDS,
+                success_threshold=self.CIRCUIT_BREAKER_SUCCESS_THRESHOLD,
+            )
+            self._circuit_breaker = get_circuit_breaker(
+                f"worker.{self.worker_type}", config
+            )
+        return self._circuit_breaker
 
     @property
     @abstractmethod
@@ -97,13 +135,28 @@ class BaseWorker(ABC):
         ...
 
     async def execute(self, *args: Any, **kwargs: Any) -> WorkerResult:
-        """Execute the worker with retry logic and error handling.
+        """Execute the worker with retry logic, circuit breaker, and metrics.
 
         This is the public interface for running workers.
+
+        Raises:
+            CircuitBreakerOpen: If circuit breaker is open and rejecting requests
         """
         start_time = datetime.now()
         max_retries = kwargs.pop("max_retries", self._settings.max_retries)
         last_error: Exception | None = None
+
+        # Check circuit breaker first
+        if self._use_circuit_breaker:
+            breaker = self._get_circuit_breaker()
+            try:
+                await breaker._can_execute()
+            except CircuitBreakerOpen:
+                self._logger.warning(
+                    "Circuit breaker open, rejecting request",
+                    worker_type=self.worker_type,
+                )
+                raise
 
         for attempt in range(max_retries + 1):
             try:
@@ -119,6 +172,19 @@ class BaseWorker(ABC):
                 # Add duration
                 duration_ms = (datetime.now() - start_time).total_seconds() * 1000
                 result.duration_ms = duration_ms
+
+                # Record metrics
+                record_worker_execution(
+                    worker_type=self.worker_type,
+                    success=result.success,
+                    duration_ms=duration_ms,
+                    cost_usd=result.cost_usd,
+                    tokens=result.tokens_used,
+                )
+
+                # Record circuit breaker success
+                if self._use_circuit_breaker:
+                    await self._get_circuit_breaker().record_success()
 
                 self._logger.info(
                     "Worker execution completed",
@@ -153,8 +219,18 @@ class BaseWorker(ABC):
                         error=str(e),
                     )
 
-        # All retries exhausted
+        # All retries exhausted - record circuit breaker failure
+        if self._use_circuit_breaker:
+            await self._get_circuit_breaker().record_failure(last_error)
+
+        # Record metrics for failed execution
         duration_ms = (datetime.now() - start_time).total_seconds() * 1000
+        record_worker_execution(
+            worker_type=self.worker_type,
+            success=False,
+            duration_ms=duration_ms,
+        )
+
         return WorkerResult(
             success=False,
             data=None,
@@ -169,6 +245,20 @@ class BaseWorker(ABC):
     def reset_cost_tracker(self) -> None:
         """Reset the cost tracker."""
         self._cost_tracker = CostTracker()
+
+    def get_circuit_breaker_stats(self) -> dict[str, Any] | None:
+        """Get circuit breaker statistics if enabled."""
+        if not self._use_circuit_breaker:
+            return None
+        return self._get_circuit_breaker().stats.to_dict()
+
+    def is_circuit_open(self) -> bool:
+        """Check if the circuit breaker is currently open."""
+        if not self._use_circuit_breaker:
+            return False
+        from src.utils.circuit_breaker import CircuitState
+
+        return self._get_circuit_breaker().state == CircuitState.OPEN
 
 
 class LLMWorker(BaseWorker):

@@ -40,7 +40,8 @@ class TestSettings:
             from src.config import Settings
 
             with pytest.raises(ValidationError):
-                Settings()
+                # Use nonexistent .env file to prevent reading actual .env
+                Settings(_env_file="/nonexistent/.env")
 
     def test_settings_output_dir_created(self, test_settings, tmp_path):
         """Test that output directory is created if it doesn't exist."""

@@ -10,44 +10,68 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 echo "=== Research Agent Setup ==="
 echo "Project root: $PROJECT_ROOT"
 
-# Check Python version
+# Check if Python 3.12 is available
 echo ""
-echo "Checking Python version..."
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 is required but not installed."
+echo "Checking for Python 3.12..."
+
+PYTHON_CMD=""
+
+# Check python3.12 first
+if command -v python3.12 &> /dev/null; then
+    PYTHON_CMD="python3.12"
+    echo "Found: python3.12"
+elif command -v python3 &> /dev/null; then
+    PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+    if [[ "$PYTHON_MINOR" -ge 12 ]]; then
+        PYTHON_CMD="python3"
+        echo "Found: python3 ($PYTHON_VERSION)"
+    fi
+fi
+
+if [[ -z "$PYTHON_CMD" ]]; then
+    echo ""
+    echo "ERROR: Python 3.12+ is required but not found."
+    echo ""
+    echo "To install Python 3.12 on Ubuntu/Pop!_OS:"
+    echo ""
+    echo "  sudo add-apt-repository ppa:deadsnakes/ppa"
+    echo "  sudo apt update"
+    echo "  sudo apt install python3.12 python3.12-venv python3.12-dev"
+    echo ""
+    echo "After installing, run this script again."
     exit 1
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "Python version: $PYTHON_VERSION"
-
-if [[ "$(echo "$PYTHON_VERSION < 3.12" | bc -l)" -eq 1 ]]; then
-    echo "ERROR: Python 3.12 or higher is required."
-    exit 1
-fi
+echo "Using: $PYTHON_CMD"
+$PYTHON_CMD --version
 
 # Create virtual environment if it doesn't exist
 echo ""
 echo "Setting up virtual environment..."
-if [[ ! -d "$PROJECT_ROOT/.venv" ]]; then
-    python3 -m venv "$PROJECT_ROOT/.venv"
-    echo "Created virtual environment at .venv"
-else
-    echo "Virtual environment already exists at .venv"
+VENV_DIR="$PROJECT_ROOT/.venv"
+
+if [[ -d "$VENV_DIR" ]]; then
+    echo "Removing old virtual environment..."
+    rm -rf "$VENV_DIR"
 fi
 
-# Activate virtual environment
-source "$PROJECT_ROOT/.venv/bin/activate"
+$PYTHON_CMD -m venv "$VENV_DIR"
+echo "Created virtual environment at .venv"
 
-# Upgrade pip
+# Activate virtual environment
+echo "Activating virtual environment..."
+source "$VENV_DIR/bin/activate"
+
+# Upgrade pip using python3 -m pip (most reliable method)
 echo ""
 echo "Upgrading pip..."
-pip install --upgrade pip
+python3 -m pip install --upgrade pip
 
 # Install dependencies
 echo ""
-echo "Installing dependencies..."
-pip install -e "$PROJECT_ROOT[dev]"
+echo "Installing dependencies from pyproject.toml..."
+python3 -m pip install -e "$PROJECT_ROOT[dev]"
 
 # Create .env from .env.example if it doesn't exist
 echo ""
@@ -70,27 +94,28 @@ echo "Creating required directories..."
 mkdir -p "$PROJECT_ROOT/outputs"
 mkdir -p "$PROJECT_ROOT/storage"
 
-# Check Docker
+# Verify installation
 echo ""
-echo "Checking Docker..."
-if command -v docker &> /dev/null; then
-    echo "Docker is installed: $(docker --version)"
-    if command -v docker-compose &> /dev/null || docker compose version &> /dev/null; then
-        echo "Docker Compose is available"
-    else
-        echo "WARNING: Docker Compose not found. Required for running services."
-    fi
-else
-    echo "WARNING: Docker not installed. Required for running services."
-fi
+echo "Verifying installation..."
+python3 -m pip list | grep -E "fastapi|langgraph|pydantic" || true
 
 # Summary
 echo ""
 echo "=== Setup Complete ==="
 echo ""
+echo "Installed versions:"
+python3 -m pip show fastapi | grep Version || true
+echo ""
+echo "To use the environment:"
+echo "  source .venv/bin/activate"
+echo ""
+echo "Quick commands:"
+echo "  Run tests:    python3 -m pytest tests/ -v"
+echo "  Start API:    python3 -m uvicorn src.main:app --reload"
+echo "  Lint code:    python3 -m ruff check src/"
+echo ""
 echo "Next steps:"
 echo "  1. Edit .env with your API keys (OPENAI_API_KEY, TAVILY_API_KEY, etc.)"
-echo "  2. Activate the virtual environment: source .venv/bin/activate"
-echo "  3. Start services: ./scripts/run_local.sh"
-echo "  4. Run tests: ./scripts/test.sh"
+echo "  2. source .venv/bin/activate"
+echo "  3. python3 -m pytest tests/ -v"
 echo ""
