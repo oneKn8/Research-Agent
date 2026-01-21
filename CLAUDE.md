@@ -209,7 +209,7 @@
 
 ## PROGRESS TRACKER
 
-### Current Status: BUILDPLAN PHASE 3 READY - Worker Services
+### Current Status: BUILDPLAN PHASE 4 READY - Orchestration Pipeline
 
 ### Completed Tasks
 - [x] Research HPC/cloud model hosting options (Brev, Vast.ai)
@@ -223,12 +223,13 @@
 - [x] Create project rules (this file)
 - [x] **BUILDPLAN Phase 1: Foundation & Infrastructure** (2026-01-21)
 - [x] **BUILDPLAN Phase 2: Brain Service** (2026-01-21)
+- [x] **BUILDPLAN Phase 3: Worker Services** (2026-01-21)
 
 ### Pending Phases (per BUILDPLAN.md)
 
 - [x] Phase 1: Foundation & Infrastructure
 - [x] Phase 2: Brain Service
-- [ ] Phase 3: Worker Services
+- [x] Phase 3: Worker Services
 - [ ] Phase 4: Orchestration Pipeline
 - [ ] Phase 5: LaTeX Output
 - [ ] Phase 6: Security Hardening & Polish
@@ -429,20 +430,27 @@
   - Cost: $0.15/M input, $0.60/M output
   - Best for: Tool calling, structured output
 
-### Python Dependencies (Research when implementing)
+### Python Dependencies (Implemented)
+
+- **openai**: 1.59.9 - AsyncOpenAI for GPT-4o-mini and vLLM
+- **tavily-python**: 0.5.0 - Web search API client (async)
+- **arxiv**: 2.1.3 - ArXiv API client with rate limiting
+- **fastapi**: 0.115.6 - API server
+- **httpx**: 0.28.1 - Async HTTP client
+- **pydantic**: 2.10.4 - Data validation
+- **structlog**: 24.4.0 - Structured logging
+
+### Python Dependencies (Planned)
+
 - **LangGraph**: Agent orchestration
 - **vLLM**: Self-hosted inference
 - **Unsloth**: 2x faster fine-tuning
 - **transformers**: Model loading
 - **datasets**: Data processing
-- **arxiv**: ArXiv API client
 - **TexSoup**: LaTeX parsing
 - **pylatexenc**: LaTeX to text
 - **datasketch**: MinHash deduplication
 - **chromadb** or **qdrant-client**: Vector DB
-- **fastapi**: API server
-- **httpx**: Async HTTP client
-- **pydantic**: Data validation
 
 ### Frontend Stack (Decided 2026-01-21)
 
@@ -540,6 +548,10 @@ research-agent/
 - `src/config.py`: Configuration with Pydantic settings
 - `src/brain/client.py`: BrainClient for vLLM integration
 - `src/brain/prompts.py`: Prompt templates for research tasks
+- `src/workers/base.py`: BaseWorker and LLMWorker base classes
+- `src/workers/search.py`: SearchWorker with Tavily API
+- `src/workers/arxiv.py`: ArxivWorker with ArXiv API
+- `src/workers/writer.py`: WriterWorker with GPT-4o-mini
 - `src/utils/errors.py`: Custom exception hierarchy
 - `src/utils/logging.py`: Structured logging with structlog
 - `services/brain/`: vLLM Dockerfile and startup script
@@ -551,6 +563,19 @@ research-agent/
 ## NOTES & DECISIONS LOG
 
 ### 2026-01-21
+
+- **BUILDPLAN Phase 3 Complete**: Worker Services
+  - BaseWorker abstract class with retry logic (exponential backoff), error handling, cost tracking (src/workers/base.py - 216 lines)
+  - LLMWorker base class for OpenAI-based workers with async client management
+  - SearchWorker: Tavily API integration with score filtering, parallel search, context/QnA modes (src/workers/search.py - 291 lines)
+  - ArxivWorker: ArXiv API with 3s rate limiting, category filtering, BibTeX generation, batch retrieval (src/workers/arxiv.py - 347 lines)
+  - WriterWorker: GPT-4o-mini content generation for LaTeX sections, abstracts, citations (src/workers/writer.py - 361 lines)
+  - CostTracker and WorkerResult for standardized cost/token tracking
+  - GPT-4o-mini pricing: $0.15/1M input, $0.60/1M output tokens
+  - Tavily pricing: $0.01 per search
+  - 27 comprehensive unit tests with mocked API clients (tests/test_workers.py - 490 lines)
+  - Added mypy overrides for tavily and arxiv modules in pyproject.toml
+  - All 91 tests passing (64 brain + 27 workers), linting and type checks clean
 
 - **BUILDPLAN Phase 2 Complete**: Brain Service
   - BrainClient class with async vLLM integration (src/brain/client.py - 320 lines)
